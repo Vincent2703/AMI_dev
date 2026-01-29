@@ -1,0 +1,90 @@
+{
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string"
+        },
+        "description": {
+            "type": "string"    
+        },
+        "version": {
+            "type": "integer"
+        },
+        "startTime": {
+            "type": "string"
+        },
+        "stopTime": {
+            "type": "string"
+        },
+        "level": {
+            "type": "string"
+        },
+        "status": {
+            "type": "string"
+        },
+        "source": {
+            "type": "string"
+        },
+        "observation": {
+            "type": "object",
+            "properties": {
+                "objective": {
+                    "type": "string"
+                },
+                "instrument": {
+                    "type": "string"
+                },
+                "phase": {
+                    "type": "string"
+                },
+                "observationZone": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string"
+                        },
+                        "description": {
+                            "type": "string"
+                        },
+                        "coordSys": {
+                            "type": "string"
+                        },
+                        "minLon": {
+                            "type": "number"
+                        },
+                        "maxLon": {
+                            "type": "number"
+                        },
+                        "minLat": {
+                            "type": "number"
+                        },
+                        "maxLat": {
+                            "type": "number"
+                        },
+                        "minX": {
+                            "type": "number"
+                        },
+                        "maxX": {
+                            "type": "number"
+                        },
+                        "minY": {
+                            "type": "number"
+                        },
+                        "maxY": {
+                            "type": "number"
+                        },
+                        "minZ": {
+                            "type": "number"
+                        },
+                        "maxZ": {
+                            "type": "number"
+                        },
+                        "target": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
