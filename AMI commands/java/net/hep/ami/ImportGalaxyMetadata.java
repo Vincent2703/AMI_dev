@@ -2,21 +2,23 @@ package net.hep.ami.command.misc;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import net.hep.ami.data.Row;
 import net.hep.ami.data.RowSet;
 import net.hep.ami.jdbc.Querier;
 import net.hep.ami.jdbc.RouterQuerier;
 import net.hep.ami.command.*;
+import net.hep.ami.customInsertionProjects.*;
 import net.hep.ami.utility.*;
-
-import net.hep.ami.metadataTypes.SpaceRemoteSensing;
 
 import org.json.*;
 import org.jetbrains.annotations.*;
 
 import java.nio.charset.StandardCharsets;
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -32,10 +34,6 @@ public class ImportGalaxyMetadata extends AbstractCommand
 {
 	/*------------------------------------------------------------------------------------------------------------*/
 
-	private static final List<String> metadataTypes = Arrays.asList("spaceRemoteSensing"); // Projects list
-
-	/*------------------------------------------------------------------------------------------------------------*/
-
 	public ImportGalaxyMetadata(@NotNull Set<String> userRoles, @NotNull Map<String, String> arguments, long transactionId)
 	{
 		super(userRoles, arguments, transactionId);
@@ -48,7 +46,8 @@ public class ImportGalaxyMetadata extends AbstractCommand
 	public StringBuilder main(@NotNull Map<String, String> arguments) throws Exception
 	{
 		QuerySingleton querySingleton = QuerySingleton.INSTANCE;
-		querySingleton.setQuerier(getQuerier("ds_db"));
+		querySingleton.setQuerier(getQuerier("self"), false);
+		Querier querier = null;
 
 		String b64Metadata = arguments.get("b64Metadata");
 		String encryptedMetadata = arguments.get("encryptedMetadata");
@@ -63,13 +62,12 @@ public class ImportGalaxyMetadata extends AbstractCommand
 
 		Boolean hasb64Metadata = !Empty.is(b64Metadata, Empty.STRING_NULL_EMPTY_BLANK);
 		Boolean hasencryptedMetadata = !Empty.is(encryptedMetadata, Empty.STRING_NULL_EMPTY_BLANK);
-		String metadataType = arguments.get("type");
+		String projectName = arguments.get("project");
 		String decodedStringMetadata = null;
 
 		if(!hasb64Metadata && !hasencryptedMetadata) {
 			throw new IllegalArgumentException("There is no metadata in the query.");
 		}else{
-			//TODO: try (in case of object/array missing)
 			if(hasencryptedMetadata) {
 				decodedStringMetadata = Utils.decodeJWT(encryptedMetadata);
 			}else{
@@ -77,19 +75,20 @@ public class ImportGalaxyMetadata extends AbstractCommand
 			}
 			metadata = new JSONObject(decodedStringMetadata);
 
-			if(Empty.is(metadataType, Empty.STRING_NULL_EMPTY_BLANK) && metadata.has("importParameters") && metadata.getJSONObject("importParameters").has("metadataType")) {
-				metadataType = metadata.getJSONObject("importParameters").getString("metadataType");
+			if(Empty.is(projectName, Empty.STRING_NULL_EMPTY_BLANK) && metadata.has("importParameters") && metadata.getJSONObject("importParameters").has("project")) {
+				projectName = metadata.getJSONObject("importParameters").getString("project");
 			}
-			if(!metadataTypes.contains(metadataType)) { 
-				throw new IllegalArgumentException("You must specify a known metadata type.");
+
+			try {
+				querier = getQuerier(projectName);
+			}catch(Exception error) {
+				throw new IllegalArgumentException(String.format("The project database %s doesn't exist", projectName));
 			}
+			querySingleton.setQuerier(querier);
+			
 			
 			datasets = metadata.getJSONArray("datasets");
 		}
-
-		/*------------------------------------------------------------------------------------------------------------*/
-
-		Querier querier = getQuerier("ds_db");
 
 		/*------------------------------------------------------------------------------------------------------------*/
 
@@ -104,8 +103,6 @@ public class ImportGalaxyMetadata extends AbstractCommand
 			if(querySingleton.exists("workflowInvocation", Arrays.asList("galaxyInvocationID"), Arrays.asList(invocation.getString("ID")))) {
 				throw new UnsupportedOperationException("This workflow invocation already exists in the database.");
 			}
-
-			//try & catch ? 
 
 			// Insert the workflow if it doesn't exist
 			String workflowID = querySingleton.insert(
@@ -364,21 +361,42 @@ public class ImportGalaxyMetadata extends AbstractCommand
 
 			// Check that there is no dataset with the same name and version (= duplicate)
 			String datasetName = dataset.getString("name");
+			String datasetDescription = dataset.has("description")?dataset.getString("description"):null;
 			String datasetVersion = dataset.getString("version");
+			
 			Boolean isDuplicate = querySingleton.exists("dataset", Arrays.asList("name", "version"), Arrays.asList(datasetName, datasetVersion));
-
 			if(isDuplicate) {
 				return new StringBuilder("<error><![CDATA[There is already a dataset with the same name and version]]></error>");
 			}
 
 			String newDatasetID = null;
 			String invocationID = invocation!=null&&invocation.has("ID")?invocation.getString("ID"):null; //No invocation if only a dataset is inserted
-			// One class in /metadataTypes for each type
-			if(metadataType.equals("spaceRemoteSensing")) { 
-				SpaceRemoteSensing spaceRemoteSensing = new SpaceRemoteSensing(dataset, invocationID);
-				spaceRemoteSensing.insertion();
-				newDatasetID = spaceRemoteSensing.datasetID; //Put outside the condition ?
-				querySingleton.updateDatasetStatus(newDatasetID, spaceRemoteSensing.name, spaceRemoteSensing.version);
+
+			if(dataset.has("_specializedMetadata_")) { // => "métadonnées métiers"
+				JSONArray allSpecializedMetadata = dataset.getJSONArray("_specializedMetadata_");
+				newDatasetID = querySingleton.insertSpecializedMetadata(allSpecializedMetadata, invocationID);
+			}else if(dataset.has("_project_")) { // If the project has a special class for insertion....
+				try {
+					String className = String.format("net.hep.ami.customInsertionProjects.%s", dataset.getString("_project_"));
+					Class<?> insertionClass = (Class<?>) java.lang.Class.forName(String.format(className));
+					Object insertionClassInstance = insertionClass
+						.getDeclaredConstructor(JSONObject.class, String.class)
+						.newInstance(dataset, invocationID);
+					
+					Method insertionMethod = insertionClass.getDeclaredMethod("insertion");
+					newDatasetID = (String) insertionMethod.invoke(insertionClassInstance);
+				}catch(Exception error) {
+					throw error;
+				}
+			}
+
+			if(newDatasetID == null || newDatasetID.strip().equals("")) {
+				throw new UnsupportedOperationException("Can't insert dataset in the DB : the returned ID is null.");
+			}
+
+			if(dataset.has("_customMetadata_")) { // Metadata stocked in a table not implemented in the base architecture
+				JSONObject customMetadata = dataset.getJSONObject("_customMetadata_");
+				querySingleton.insertCustomMetadata(customMetadata, newDatasetID);
 			}
 
 			// Has parent(s) ?
@@ -443,7 +461,7 @@ public class ImportGalaxyMetadata extends AbstractCommand
 							RowSet rowSet = querier.executeSQLQuery("dataset", SQLGetDatasetParentID);
 							List<Row> rows = rowSet.getAll();
 							if(rows.size() > 0) {
-								Row row = rows.get(0);
+								Row row = rows.get(0); // Only get the first file <-- Bad idea ?
 								String parentName = row.getValue("datasetName");
 								String parentID = row.getValue("datasetID");
 								datasetsUsedByIP.put(parentName, parentID);
@@ -507,117 +525,8 @@ public class ImportGalaxyMetadata extends AbstractCommand
 				);
 			}
 
-
-			// Custom metadata
-			if(dataset.has("custom_metadata")) {
-				JSONObject customUserMetadata = dataset.getJSONObject("custom_metadata");
-
-				//Standard (generic space teledetection) metadata
-				if(customUserMetadata.has("standard")) {
-					JSONArray standardsMetadata = customUserMetadata.getJSONArray("standard");
-					for(int stdM=0 ; stdM < standardsMetadata.length() ; stdM++) {
-						JSONObject standardMetadata = standardsMetadata.getJSONObject(stdM);
-						if(standardMetadata.has("value")) {
-							// The metadata is either a int/float/string
-							String value = standardMetadata.getString("value");
-							String type = standardMetadata.getString("type");
-
-							String intValue = null;
-							String floatValue = null;
-							String stringValue = null;
-
-							if(type == "integer") {
-								intValue = value;
-							}else if(type == "float") {
-								floatValue = value;
-							}else {
-								stringValue = value;
-							}
-
-							String standardMetadataID = querySingleton.insert(
-								"standardMetadata",
-								Arrays.asList("type", "intValue", "floatValue", "stringValue"), // Do we need a boolean value ?
-								Arrays.asList(
-									type,
-									intValue,
-									floatValue,
-									stringValue
-								)
-							);
-
-							String dataset_customMetadataID = querySingleton.insert(
-								"dataset_customMetadata",
-								Arrays.asList("datasetID", "name", "description", "standardMetadataID", "specialCustomMetadataID"),
-								Arrays.asList(
-									newDatasetID,
-									standardMetadata.getString("name"),
-									standardMetadata.has("description")?standardMetadata.getString("description"):null,
-									standardMetadataID,
-									null
-								)
-							);
-						}
-					}
-				}
-
-				//Special metadata
-				if(customUserMetadata.has("special")) {
-					JSONArray specialsMetadata = customUserMetadata.getJSONArray("special");
-
-					for(int specM=0 ; specM < specialsMetadata.length() ; specM++) {
-						JSONObject specialMetadata = specialsMetadata.getJSONObject(specM);
-
-						List<String> cols = new ArrayList<String>(); // Columns name
-						List<String> values = new ArrayList<String>(); // Columns value
-
-						String tableName = specialMetadata.getString("table_name");
-						JSONArray row = specialMetadata.getJSONArray("row");
-
-						for(int c = 0; c < row.length(); c++) {
-							JSONObject col = row.getJSONObject(c);
-							String key = col.keys().next();
-							cols.add(key);
-
-							Object rawValue = col.get(key);
-							String value;
-
-							if(rawValue == null || rawValue.equals(JSONObject.NULL)) {
-								value = null;
-							}else if(rawValue instanceof Boolean) {
-								value = (Boolean) rawValue ? "1" : "0";
-							}else {
-								value = rawValue.toString();
-							}
-
-							values.add(value);
-						}
-
-
-						//To construct the query
-
-						String specialMetadataID = querySingleton.insert(
-							tableName,
-							cols,
-							values
-						);
-
-						String dataset_customMetadataID = querySingleton.insert(
-							"dataset_customMetadata",
-							Arrays.asList("datasetID", "name", "description", "standardMetadataID", "specialCustomMetadataID"),
-							Arrays.asList(
-							newDatasetID,
-							specialMetadata.getString("name"),
-							specialMetadata.has("description")?specialMetadata.getString("description"):null,
-							null,
-							specialMetadataID
-							)
-						);
-
-					}
-				}
-			}
-
-			querier.getConnection().commit();
+			// Commit the new rows !
+			querySingleton.commit();
 			
 			/* Update its children */
 			String SQLGetChildrenDatasets = String.format(
@@ -648,7 +557,7 @@ public class ImportGalaxyMetadata extends AbstractCommand
 				}
 				galaxyAPIKey = userJSON.getString("galaxyAPIKey");
 
-				if(galaxyAPIKey != null && galaxyAPIKey.equals("")) {
+				if(galaxyAPIKey != null && galaxyAPIKey.strip().equals("")) {
 					throw new IllegalArgumentException(String.format("No API key was found for the user (%s)", currentUserName));
 				}
 			
@@ -686,7 +595,7 @@ public class ImportGalaxyMetadata extends AbstractCommand
 	@Contract(pure = true)
 	public static String usage()
 	{
-		return "-type=\"\" -encryptedMetadata=\"\" | -b64Metadata=\"\"";
+		return "-project=\"\" -encryptedMetadata=\"\" | -b64Metadata=\"\"";
 	}
 
 	/*----------------------------------------------------------------------------------------------------------------*/

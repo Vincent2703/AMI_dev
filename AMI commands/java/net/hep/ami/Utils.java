@@ -1,18 +1,19 @@
 package net.hep.ami;
-import java.io.ByteArrayInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.everit.json.schema.PrimitiveValidationStrategy;
 import org.everit.json.schema.Schema;
 import org.everit.json.schema.Validator;
 import org.everit.json.schema.loader.SchemaLoader;
-import org.json.JSONObject;
+import org.json.*;
 
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.JwtParser;
-import io.jsonwebtoken.security.Keys;
 import io.jsonwebtoken.security.SignatureAlgorithm;
 
 import java.security.KeyFactory;
@@ -20,8 +21,9 @@ import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
 
 import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.regex.Pattern;
-import java.util.regex.Matcher;
 
 public final class Utils {
 
@@ -30,6 +32,7 @@ public final class Utils {
 
     private Utils() {}
 
+    // Decode the JWT, using the public key stored in resources (the path is defined in JWTPublicKeyPath juste above)
     public static String decodeJWT(String encodedJWT) throws Exception {
         // 1) Get the the public key
         SignatureAlgorithm signatureAlgo = Jwts.SIG.RS256; //Get RSA
@@ -102,12 +105,14 @@ public final class Utils {
 
     }
 
+    // Decode a base64 string
     public static String decodeB64(String b64String) {
         byte[] decodedBytes = Base64.getDecoder().decode(b64String);
         String decodedString = new String(decodedBytes, StandardCharsets.UTF_8);
         return decodedString;
     }
 
+    // Is it a file path ?
     public static boolean isAFilePath(String path) {
         return patternIsAFilePath.matcher(path).find();
     }

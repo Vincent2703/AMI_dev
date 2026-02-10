@@ -1,10 +1,6 @@
 package net.hep.ami.command.misc;
 
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -47,20 +43,22 @@ public class AutoUpdateDataset extends AbstractCommand {
     @NotNull
 	@Override
 	public StringBuilder main(@NotNull Map<String, String> arguments) throws Exception {
-        QuerySingleton querySingleton = QuerySingleton.INSTANCE;
-		querySingleton.setQuerier(getQuerier("ds_db"));
-
-        Querier querier = getQuerier("ds_db");
+        QuerySingleton querySingleton = QuerySingleton.INSTANCE;  
 
         String galaxyURL = querySingleton.getGalaxyURL();
+
+        String databaseName = arguments.get("database");
 
         String datasetID = arguments.get("datasetID");
         String userAPIKey = arguments.get("userAPIKey");
 
-        if(Empty.is(datasetID, Empty.STRING_NULL_EMPTY_BLANK) || Empty.is(userAPIKey, Empty.STRING_NULL_EMPTY_BLANK) || userAPIKey == null) {
-            throw new IllegalArgumentException("Missing argument(s): datasetID & userAPIKey.");
+        if(Empty.is(datasetID, Empty.STRING_NULL_EMPTY_BLANK) || Empty.is(userAPIKey, Empty.STRING_NULL_EMPTY_BLANK) || userAPIKey == null || Empty.is(databaseName, Empty.STRING_NULL_EMPTY_BLANK)) {
+            throw new IllegalArgumentException("Missing argument(s): datasetID, userAPIKey and database.");
         }
 
+        Querier querier = getQuerier(databaseName);
+        querySingleton.setQuerier(querier);
+        
         /* Check dataset has needUpdate status */
         boolean needUpdate = querySingleton.getColValue("dataset", "status", "status", "canBeUpdated") != null;
 
@@ -107,7 +105,7 @@ public class AutoUpdateDataset extends AbstractCommand {
                     "FROM dataset ds2 \n" +
                     "WHERE ds2.name = ds1.name ) LIMIT 1;", stepID)
                 );
-                Row rowFile = queryFileLatestDS.getAll().get(0);
+                Row rowFile = queryFileLatestDS.getFirst();
                 String filePath = rowFile.getValue("path");
                 stepsValues.put(stepID, filePath);
             }
@@ -201,6 +199,6 @@ public class AutoUpdateDataset extends AbstractCommand {
 	@Contract(pure = true)
 	public static String usage()
 	{
-		return "-datasetID=\"\" -userAPIKey=\"\"";
+		return "-database=\"\" -datasetID=\"\" -userAPIKey=\"\"";
 	}
 }
