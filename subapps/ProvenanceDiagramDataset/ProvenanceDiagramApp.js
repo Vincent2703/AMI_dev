@@ -5,8 +5,10 @@
         $init: function() {
             this.$super.$init();
         },
-        onReady: function() {
-
+        onReady: async function() {
+            /* --- */
+            this.selectedProject = await getSelectedProject();
+            /* --- */
         },
         onLogin: function() { //Only for logged users
             amiWebApp.replaceHTML("#ami_main_content",'<div class="px-3 pb-2 text-center" id="A2944C0A_9249_E4D2_3679_494C1A3AAAF0"></div>\n');
@@ -28,9 +30,9 @@
             Take a dataset ID as an argument
             return the dot diagram code
         */
-        makeDot: function(datasetID) {
+        makeDot: async function(datasetID) {
             // Get the datasets related to the selected dataset -> all its parent, children and "cousins" (other datasets used by the children as inputs)
-            const getProvenanceDatasetsCmd = `SearchQuery -catalog="ds_db" -entity="provenance" -raw="CALL getDatasetRelations(${datasetID}, 4)"`;
+            const getProvenanceDatasetsCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="provenance" -raw="CALL getDatasetRelations(${datasetID}, 4)"`;
         
             return new Promise((resolve, reject) => {
                 let nodes = new Map(); // All nodes
@@ -39,7 +41,7 @@
         
                 amiCommand.execute(getProvenanceDatasetsCmd).done((queryResult) => {
                     const rows = amiWebApp.jspath("..row", queryResult);
-                    if (rows.length > 0) {
+                    if(rows.length > 0) {
                         rows.forEach((queryResult) => {
                             const parentDatasetID = amiWebApp.jspath('..field{.@name==="parentDatasetID"}.$', queryResult)[0] || '',
                                 parentDatasetName = amiWebApp.jspath('..field{.@name==="parentDatasetName"}.$', queryResult)[0] || '',
@@ -80,9 +82,9 @@
                         }`;
         
                         resolve(dot); // Résolution de la promesse avec le code Dot
-                    } else {
+                    }else {
                         $("#A2944C0A_9249_E4D2_3679_494C1A3AAAF0").html(`<h2>No parent dataset with the ID ${datasetID}</h2>`);
-                        reject("Aucune donnée trouvée pour l'ID du dataset"); // Rejeter la promesse si pas de données
+                        reject("No relation found for this dataset"); // Rejeter la promesse si pas de données
                     }
                 }).fail(function (jqXHR, txtError) {
                     console.log(`Une erreur est survenue: ${txtError}`, jqXHR);
@@ -120,7 +122,7 @@
                 "state": state,
                 "tooltip": tooltip,
                 "color": color,
-                "URL": `http://localhost:8000/?subapp=TableViewer&userdata=%7B%22command%22%3A%22BrowseQuery+-catalog%3D%5C%22ds_db%5C%22+-entity%3D%5C%22dataset%5C%22+-mql%3D%5C%22SELECT+*+WHERE+dataset.ID+%3D%27${ID}%27%5C%22+-limit%3D%5C%2210%5C%22%22%2C%22catalog%22%3A%22ds_db%22%2C%22entity%22%3A%22dataset%22%2C%22primaryField%22%3A%22ID%22%7D`,
+                "URL": `http://localhost:8000/?subapp=TableViewer&userdata=%7B%22command%22%3A%22BrowseQuery+-catalog%3D%5C%22${this.selectedProject}%5C%22+-entity%3D%5C%22dataset%5C%22+-mql%3D%5C%22SELECT+*+WHERE+dataset.ID+%3D%27${ID}%27%5C%22+-limit%3D%5C%2210%5C%22%22%2C%22catalog%22%3A%22${this.selectedProject}%22%2C%22entity%22%3A%22dataset%22%2C%22primaryField%22%3A%22ID%22%7D`,
                 "selected": selected
             };
         },

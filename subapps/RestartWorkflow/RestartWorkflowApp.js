@@ -4,19 +4,19 @@
         $extends: ami.SubApp,
         $init: async function() {
             this.$super.$init();
-            this.galaxyURL = null;
-            this.userGalaxyTokenAPI = null;
+
             this.isUpdate = false; // Fetch the last DS version if relevant
             this.workflowID = null;
             this.workflowVersionsRootInputs = {};
         },
-        onReady: function() {
+        onReady: async function() {
+            /* --- */
+            this.galaxyURL = await getGalaxyURL();
+            this.userGalaxyTokenAPI = await getUserGalaxyAPIToken();
+            this.selectedProject = await getSelectedProject();
+            /* --- */
         },
         onLogin: async function() {
-            // To make the requests work...
-            this.galaxyURL = await this.getGalaxyURL();
-            this.userGalaxyTokenAPI = await this.getUserGalaxyAPIToken();
-
             const userData = new URLSearchParams(document.location.search).get("userdata"); //Get URL params
             const URLParams = JSON.parse(userData);
 
@@ -142,47 +142,6 @@
             $("#A2944C0A_9249_E4D2_3679_494C1A3AAAF0").html("Please sign-in.");
         },
 
-        /* From the config, get the Galaxy URL */
-        getGalaxyURL: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetConfig").done((queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const rowGalaxyURL = rows.find(param => param.field[0]["@name"] === "galaxy_url");
-                        const galaxyURL = rowGalaxyURL.field[0]["$"];
-                        resolve(galaxyURL);
-                    }
-                    reject("An error occured while retrieving the Galaxy URL from the config.")
-               });
-            });
-        },
-
-        /* Get the current user Galaxy API token */
-        getUserGalaxyAPIToken: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetSessionInfo").done(async (queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const AMIUserName = amiWebApp.jspath('..field{.@name==="AMIUser"}.$', rows[0])[0];
-                        if(AMIUserName) {
-                            const getUserGalaxyAPITokenCmd = `SearchQuery -catalog="self" -entity="router_user" -sql="` +
-                            `SELECT json ` +
-                            `FROM router_user ` +
-                            `WHERE AMIUser='${AMIUserName}'"`;
-                            await amiCommand.execute(getUserGalaxyAPITokenCmd).done((queryResult) => {
-                                const rows = amiWebApp.jspath("..row", queryResult);
-                                if(rows.length == 1) {
-                                    const userJSON = amiWebApp.jspath('..field{.@name==="json"}.$', rows[0])[0];
-                                    resolve(JSON.parse(userJSON).galaxyAPIKey);
-                                }
-                            }); 
-                        }
-                    }
-                    reject("An error occured while retrieving the user Galaxy API token.");
-                });
-            });
-        },
-
         /* Get all versions for this workflow */
         getWorkflowVersions: async function() {
             const getselectedWorkflowVersionsURL = `${this.galaxyURL}/api/workflows/${this.workflowID}/versions`;
@@ -222,7 +181,6 @@
         // Fetch the "root inputs" (the inputs to fill in, in order to start a workflow)
         getWorkflowRootInputs: async function(selectedWorkflowVersion) {
             const getWorkflowVersionURL = `${this.galaxyURL}/api/workflows/${this.workflowID}?version=${selectedWorkflowVersion}&legacy=true`; // Legacy to be able to get the step_ID
-            console.log(getWorkflowVersionURL);
 
             let rootInputs = {"parameter_input":{}, "data_input":{}, "data_collection_input":{}};
 
@@ -248,7 +206,6 @@
                     rootInputs[type][step.id] = rootInput;
                 });
                 
-                console.log(rootInputs);
                 return rootInputs;
                 
             }catch(error) {
@@ -338,7 +295,7 @@
 
         /* From the stepID, get the latest dataset file that can be used for the corresponding input */
         getLatestDatasetFile: async function(stepID) {
-            const getLatestDatasetFileCmd = `SearchQuery -catalog="ds_db" -entity="input" -raw="` +
+            const getLatestDatasetFileCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="input" -raw="` +
             `SELECT tag.name AS tagName, ds1.name AS datasetName, ds1.version AS datasetVersion, physicalFile.path AS path ` +
             `FROM workflowVersion_tag ` +
             `INNER JOIN tag ON tag.ID = workflowVersion_tag.tagID ` +
@@ -372,7 +329,7 @@
         /* From a file path, get the corresponding HDAID if it exists */
         getHDAIDFromPath: async function(path) {
             return new Promise(async (resolve, reject) => { 
-                const getInputsValuesCmd = `SearchQuery -catalog="ds_db" -entity="file" -raw="` +
+                const getInputsValuesCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="file" -raw="` +
                 `SELECT file.galaxyDatasetID AS HDAID ` +
                 `FROM file ` +
                 `INNER JOIN physicalFile ON physicalFile.fileID = file.ID ` +
@@ -394,7 +351,7 @@
         getDefaultClusterParams: async function(workflowVersion) {
             let parameters = {};
 
-            const getLatestClusterParamsUsedCmd = `SearchQuery -catalog="ds_db" -entity="workflowInvocation" -raw="` +
+            const getLatestClusterParamsUsedCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflowInvocation" -raw="` +
             `SELECT tool.toolID AS toolID, clusterParams.parametersDict AS parametersDict ` +
             `FROM workflowInvocation ` +
             `INNER JOIN workflowVersion wfv1 ON wfv1.ID = workflowInvocation.workflowVersionID ` +
@@ -474,7 +431,8 @@
                 "use_cached_job": use_cached_job
             };
 
-            if(latestClusterParamsUsed != null && await this.getGalaxyURL() != "http://localhost:8081") {
+            // If we are in local, don't use cluster parameters
+            if(latestClusterParamsUsed != null && await this.galaxyURL.startsWith("http://localhost")) {
                 payload["parameters"] = latestClusterParamsUsed;
             }
 

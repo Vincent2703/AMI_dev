@@ -2,24 +2,25 @@
     "use strict";
     $AMIClass("AutoUpdateWorkflowApp", {
         $extends: ami.SubApp,
-        $init: async function() {
+        $init: function() {
             this.$super.$init();
-            this.galaxyURL = null;
-            this.userGalaxyTokenAPI = null;
-            this.workflowID = null;
         },
-        onReady: function() {
+        onReady: async function() {
+            /* --- */
+            this.galaxyURL = await getGalaxyURL();
+            this.userGalaxyTokenAPI = await getUserGalaxyAPIToken();
+            this.selectedProject = await getSelectedProject();
+            /* --- */
         },
         onLogin: async function() {
-            this.galaxyURL = await this.getGalaxyURL();
-            this.userGalaxyTokenAPI = await this.getUserGalaxyAPIToken();
-
             const userData = new URLSearchParams(document.location.search).get("userdata"); //Get URL params
             const URLParams = JSON.parse(userData);
 
             let workflowVersion = null;
 
-            if(URLParams.hasOwnProperty("workflowID") && URLParams.hasOwnProperty("workflowVersion")) {
+            if(URLParams == null) {
+                window.location.replace("/?subapp=workflowsList");
+            }else if(URLParams.hasOwnProperty("workflowID") && URLParams.hasOwnProperty("workflowVersion")) {
                 this.workflowID = URLParams.workflowID;
                 workflowVersion = URLParams.workflowVersion;
             }else {
@@ -152,47 +153,6 @@
             $("#A2944C0A_9249_E4D2_3679_494C1A3AAAF0").html("Please sign-in.");
         },
 
-        /* From the config, get the Galaxy URL */
-        getGalaxyURL: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetConfig").done((queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const rowGalaxyURL = rows.find(param => param.field[0]["@name"] === "galaxy_url");
-                        const galaxyURL = rowGalaxyURL.field[0]["$"];
-                        resolve(galaxyURL);
-                    }
-                    reject("An error occured while retrieving the Galaxy URL from the config.")
-               });
-            });
-        },
-
-        /* Get the current user Galaxy API token */
-        getUserGalaxyAPIToken: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetSessionInfo").done(async (queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const AMIUserName = amiWebApp.jspath('..field{.@name==="AMIUser"}.$', rows[0])[0];
-                        if(AMIUserName) {
-                            const getUserGalaxyAPITokenCmd = `SearchQuery -catalog="self" -entity="router_user" -sql="` +
-                            `SELECT json ` +
-                            `FROM router_user ` +
-                            `WHERE AMIUser='${AMIUserName}'"`;
-                            await amiCommand.execute(getUserGalaxyAPITokenCmd).done((queryResult) => {
-                                const rows = amiWebApp.jspath("..row", queryResult);
-                                if(rows.length == 1) {
-                                    const userJSON = amiWebApp.jspath('..field{.@name==="json"}.$', rows[0])[0];
-                                    resolve(JSON.parse(userJSON).galaxyAPIKey);
-                                }
-                            }); 
-                        }
-                    }
-                    reject("An error occured while retrieving the user Galaxy API token.");
-                });
-            });
-        },
-
         /* Get workflow info : such as name & inputs */
         getWorkflowInfo: async function(workflowVersion) {
             const getWorkflowVersionURL = `${this.galaxyURL}/api/workflows/${this.workflowID}?version=${workflowVersion}&legacy=true`; // Legacy to be able to get the step_ID
@@ -258,7 +218,7 @@
         /* Get (and create it if needed) the workflow version ID in the AMI DB */
         getWorkflowVersionID: async function(workflowVersion) {
             return new Promise((resolve, reject) => { 
-                const getWFVersIDCmd = `SearchQuery -catalog="ds_db" -entity="workflowVersion" -sql="` +
+                const getWFVersIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflowVersion" -sql="` +
                 `SELECT ID ` +
                 `FROM workflowVersion ` +
                 `WHERE workflowID='${this.workflowID}' AND version='${workflowVersion}';"`;
@@ -272,7 +232,7 @@
                         if(rows.length > 1) {
                             reject("Several workflows exist with the same ID and version ?!");
                         }else {
-                            const insertWFVersCmd = `UpdateQuery -catalog="ds_db" -entity="workflowVersion" -sql="` +
+                            const insertWFVersCmd = `UpdateQuery -catalog="${this.selectedProject}" -entity="workflowVersion" -sql="` +
                             `INSERT INTO workflowVersion ` +
                             `(workflowID, version) ` +
                             `VALUES ('${this.workflowID}', '${workflowVersion}')"`;
@@ -295,7 +255,7 @@
         getTags: async function() {
             let tags = [];
             return new Promise((resolve, reject) => { 
-                const getWFVersIDCmd = `SearchQuery -catalog="ds_db" -entity="workflowVersion_tag" -sql="` +
+                const getWFVersIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflowVersion_tag" -sql="` +
                 `SELECT tag.name AS tagName ` +
                 `FROM dataset_file ` +
                 `INNER JOIN tag ON tag.ID = dataset_file.tagID ` +
@@ -320,7 +280,7 @@
             return new Promise((resolve, reject) => { 
                 let tagsInputs = {};
 
-                const getWFVersIDCmd = `SearchQuery -catalog="ds_db" -entity="workflowVersion_tag" -sql="` +
+                const getWFVersIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflowVersion_tag" -sql="` +
                 `SELECT workflowVersion_tag.stepID AS stepID, tag.name AS tagName ` +
                 `FROM workflowVersion_tag ` +
                 `INNER JOIN tag ON tag.ID = workflowVersion_tag.tagID ` +
@@ -364,13 +324,13 @@
 
             return new Promise(async (resolve, reject) => { 
                 // We delete all previous rows for this wf version... (Easiest way to avoid duplicates and non wanted values)
-                const deleteTagsInputsRelationsCmd = `UpdateQuery -catalog="ds_db" -entity="workflowVersion_tag" -sql="` +
+                const deleteTagsInputsRelationsCmd = `UpdateQuery -catalog="${this.selectedProject}" -entity="workflowVersion_tag" -sql="` +
                 `DELETE FROM workflowVersion_tag ` +
                 `WHERE workflowVersionID=${workflowVersionID};"`;
 
                 // Insert the relations...
                 amiCommand.execute(deleteTagsInputsRelationsCmd).done((deleteResult) => {
-                    let insertTagsInputsRelationsCmd = `UpdateQuery -catalog="ds_db" -entity="workflowVersion_tag" -sql="` +
+                    let insertTagsInputsRelationsCmd = `UpdateQuery -catalog="${this.selectedProject}" -entity="workflowVersion_tag" -sql="` +
                     `INSERT INTO workflowVersion_tag ` +
                     `(workflowVersionID, stepID, tagID) ` +
                     `VALUES`;
@@ -389,7 +349,7 @@
                         if(rows.length == 1) {
                             const isAutoUpdateActivated = $("#autoUpdateActivation").is(":checked");
                             const historyID = $("#histories").val();
-                            const activateAutoUpdateCmd = `UpdateQuery -catalog="ds_db" -entity="workflowVersion" -sql="` +
+                            const activateAutoUpdateCmd = `UpdateQuery -catalog="${this.selectedProject}" -entity="workflowVersion" -sql="` +
                             `UPDATE workflowVersion ` +
                             `SET autoUpdate = '${isAutoUpdateActivated?1:0}', historyID = '${historyID}' ` +
                             `WHERE ID = '${workflowVersionID}';"`;
@@ -412,7 +372,7 @@
         /* From a tag name, get its ID */
         getTagIDfromName: async function(tagName) {
             return new Promise((resolve, reject) => { 
-                const getWorkflowIDCmd = `SearchQuery -catalog="ds_db" -entity="tag" -sql="` +
+                const getWorkflowIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="tag" -sql="` +
                 `SELECT ID ` +
                 `FROM tag ` +
                 `WHERE name='${tagName}';"`;
@@ -433,7 +393,7 @@
         /* Auto update activated ? + history ID */
         getWorkflowVersionInfo: async function(workflowVersion) {
              return new Promise((resolve, _) => { 
-                const getIsAutoUpdateActivatedCmd = `SearchQuery -catalog="ds_db" -entity="workflowVersion" -sql="` +
+                const getIsAutoUpdateActivatedCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflowVersion" -sql="` +
                 `SELECT autoUpdate, historyID ` +
                 `FROM workflowVersion ` +
                 `WHERE workflowID='${this.workflowID}' AND version='${workflowVersion}';"`;

@@ -2,24 +2,25 @@
     "use strict";
     $AMIClass("WorkflowsListApp", {
         $extends: ami.SubApp,
-        $init: async function() {
+        $init: function() {
             this.$super.$init();
-            this.galaxyURL = null;
-            this.userGalaxyTokenAPI = null;
         },
-        onReady: function() {
+        onReady: async function() {
+            /* --- */
+            this.galaxyURL = await getGalaxyURL();
+            this.userGalaxyTokenAPI = await getUserGalaxyAPIToken();
+            this.selectedProject = await getSelectedProject();
+            /* --- */
         },
-        onLogin: async function() {
-            this.galaxyURL = await this.getGalaxyURL();
-            this.userGalaxyTokenAPI = await this.getUserGalaxyAPIToken();
-            
+        onLogin: async function() {           
             amiWebApp.replaceHTML("#ami_main_content", `
                 <table id="workflows" class="table">
                     <thead class="thead-dark">
                         <th>Name</th>
                         <th>Version</th>
                         <th>Auto update</th>
-                        <th>Configure</th>
+                        <th>Configuration</th>
+                        <th>Launching</th>
                     </thead>
                     <tbody>
                     </tbody>
@@ -36,7 +37,8 @@
                         <td>${workflow.name} <p class="showPrevVersions" style="font-size:0.8em; cursor:pointer; color:dodgerblue;">Show previous versions</p></td>
                         <td class="versions"></td>
                         <td class="autoUpdate"></td>
-                        <td class="configure"></td>
+                        <td class="configuration"></td>
+                        <td class="launching"></td>
                     </tr>
                 `);
 
@@ -55,8 +57,10 @@
                         checked = workflowsVersionsAutoUpdate[workflow.ID][version];
                     }
                     $(`#${workflow.ID} .autoUpdate`).append(`<p class="d-none mb-1"><input class="form-check-input" type="checkbox" disabled ${checked?"checked":''}></p>`);
-                    // Configure
-                    $(`#${workflow.ID} .configure`).append(`<p class="d-none mb-1"><a href='?subapp=AutoUpdateWorkflow&userdata={"workflowID":"${workflow.ID}","workflowVersion":"${version}"}'>Edit</a></p>`);
+                    // Configuration
+                    $(`#${workflow.ID} .configuration`).append(`<p class="d-none mb-1"><a href='?subapp=AutoUpdateWorkflow&userdata={"workflowID":"${workflow.ID}","workflowVersion":"${version}"}'>Edit</a></p>`);
+                    // Restart (from AMI)
+                    $(`#${workflow.ID} .launching`).append(`<p class="d-none mb-1"><a href='?subapp=restartWorkflow&userdata={"workflowID":"${workflow.ID}","workflowVersion":"${version}","isUpdate":"false"}'>Restart</a></p>`);
                 })
 
                 $(`#${workflow.ID} td p.d-none:last-child`).toggleClass("d-none d-block");
@@ -66,52 +70,11 @@
             $("#A2944C0A_9249_E4D2_3679_494C1A3AAAF0").html("Please sign-in.");
         },
 
-        /* From the config, get the Galaxy URL */
-        getGalaxyURL: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetConfig").done((queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const rowGalaxyURL = rows.find(param => param.field[0]["@name"] === "galaxy_url");
-                        const galaxyURL = rowGalaxyURL.field[0]["$"];
-                        resolve(galaxyURL);
-                    }
-                    reject("An error occured while retrieving the Galaxy URL from the config.")
-               });
-            });
-        },
-
-        /* Get the current user Galaxy API token */
-        getUserGalaxyAPIToken: function() {
-            return new Promise((resolve, reject) => {
-                amiCommand.execute("GetSessionInfo").done(async (queryResult) => {
-                    const rows = amiWebApp.jspath("..row", queryResult);
-                    if(rows.length > 0) {
-                        const AMIUserName = amiWebApp.jspath('..field{.@name==="AMIUser"}.$', rows[0])[0];
-                        if(AMIUserName) {
-                            const getUserGalaxyAPITokenCmd = `SearchQuery -catalog="self" -entity="router_user" -sql="` +
-                            `SELECT json ` +
-                            `FROM router_user ` +
-                            `WHERE AMIUser='${AMIUserName}'"`;
-                            await amiCommand.execute(getUserGalaxyAPITokenCmd).done((queryResult) => {
-                                const rows = amiWebApp.jspath("..row", queryResult);
-                                if(rows.length == 1) {
-                                    const userJSON = amiWebApp.jspath('..field{.@name==="json"}.$', rows[0])[0];
-                                    resolve(JSON.parse(userJSON).galaxyAPIKey);
-                                }
-                            }); 
-                        }
-                    }
-                    reject("An error occured while retrieving the user Galaxy API token.");
-                });
-            });
-        },
-
         /* Get all workflows ID. TODO later : filter by group id */
         getWorkflows: async function() {
             let workflows = [];
             return new Promise((resolve, reject) => { 
-                const getWorkflowIDCmd = `SearchQuery -catalog="ds_db" -entity="workflow" -raw="` +
+                const getWorkflowIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflow" -raw="` +
                 `SELECT galaxyWorkflowID AS ID, name ` +
                 `FROM workflow ` +
                 `ORDER BY workflow.name;"`;
@@ -154,7 +117,7 @@
         getWorkflowsVersionsWithAutoUpdate: async function() {
             let workflows = {};
             return new Promise((resolve, reject) => { 
-                const getWorkflowIDCmd = `SearchQuery -catalog="ds_db" -entity="workflow" -sql="` +
+                const getWorkflowIDCmd = `SearchQuery -catalog="${this.selectedProject}" -entity="workflow" -sql="` +
                 `SELECT workflow.galaxyWorkflowID AS ID, workflowVersion.version AS version, workflowVersion.autoUpdate AS autoUpdate ` +
                 `FROM workflowVersion ` +
                 `INNER JOIN workflow ON workflow.galaxyWorkflowID = workflowVersion.workflowID ` +
