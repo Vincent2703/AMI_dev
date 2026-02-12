@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!DOCTYPE html>
+
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+
+		<title>AMI dev</title>
+
+		<script type="text/javascript" src="js/jquery.min.js"></script>
+
+		<script type="text/javascript" src="js/ami.min.js?bootstrap=5"></script>
+
+		<script type="text/javascript" src="js/osugUtils.js"></script>
+
+		<script type="text/javascript">
+			amiWebApp.onRefresh = async function(isAuth)
+			{
+				if(!isAuth) return;
+
+				/* Get currently selected database */
+				const projectName = await getSelectedProject(true);
+				const projectNameExtName = projectName!=null?projectName.replace("AMI_Project_", ''):'';
+
+				/* Get number of datasets to update */
+				let nbDatasetsToUpdate = 0;
+				const getNbDatasetsToUpdateCmd = `SearchQuery -catalog="${projectNameExtName}" -entity="router_user" -sql="SELECT ID FROM dataset WHERE status = 'canBeUpdated';"`;
+				await amiCommand.execute(getNbDatasetsToUpdateCmd).done((queryResult) => {
+					const rows = amiWebApp.jspath("..row", queryResult);
+					nbDatasetsToUpdate = rows.length;
+				}); 
+				const datasetFontWeight = nbDatasetsToUpdate>0?"bold":"normal";
+
+				/* Get names of project datasets */
+				let projectDatabasesNames = [];
+				const getProjectDatabaseNamesCmd = `SearchQuery -catalog="self" -entity="" -raw="SHOW DATABASES;"`; // Can't use where here...
+				await amiCommand.execute(getProjectDatabaseNamesCmd).done((queryResult) => {
+					const rows = amiWebApp.jspath("..row", queryResult);
+					rows.forEach((row) => {
+                        const databaseName = amiWebApp.jspath('..field{.@name==="Database"}.$', row)[0];
+						if(databaseName.startsWith("AMI_Project")) {
+							projectDatabasesNames.push(databaseName);
+						}
+					}); 
+				});
+
+				var menu =
+					'<li class="nav-item dropdown">' +
+					'  <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown">' +
+					'    Search' +
+					'  </a>' +
+					'  <div class="dropdown-menu">' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=search">Search</a>' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=simpleSearch">Simple Search</a>' +
+					'  </div>' +
+					'</li>' +
+					'<li class="nav-item dropdown">' +
+					'  <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown">' +
+					'    Tools' +
+					'  </a>' +
+					'  <div class="dropdown-menu">' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=command">Command</a>' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=emergency">Emergency</a>' +
+					'    <div class="dropdown-divider"></div>' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=schemaViewer">Schema Viewer</a>' +
+					'    <div class="dropdown-divider"></div>' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=document&userdata=api.html">AMI Web Framework API</a>' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=document&userdata=info.html">AMI Web Framework Info</a>' +
+					'  </div>' +
+					'</li>' +
+					'<li class="nav-item dropdown">' +
+					'  <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown">' +
+					'    <i class="bi bi-database"></i> <span style="font-weight:'+datasetFontWeight+'">Datasets</span>' +
+					'  </a>' +
+					'  <div class="dropdown-menu">' +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + `?subapp=tableViewer&userdata={%22catalog%22%3A+%22${projectNameExtName}%22%2C+%22entity%22%3A+%22dataset%22}">All Datasets</a>` +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + `?subapp=tableViewer&userdata=%7B%22command%22%3A%22BrowseQuery+-catalog%3D%5C%22${projectNameExtName}%5C%22+-entity%3D%5C%22dataset%5C%22+-mql%3D%5C%22SELECT+*+WHERE+dataset.status+%3D%27canBeUpdated%27%5C%22+-limit%3D%5C%2210%5C%22%22%2C%22catalog%22%3A%22${projectNameExtName}%22%2C%22entity%22%3A%22dataset%22%2C%22primaryField%22%3A%22ID%22%7D">Datasets to update <span style="color: red;">(`+nbDatasetsToUpdate+`)</span></a>` +
+					'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=workflowsList">Workflows</a>' +
+					'  </div>' +
+					'</li>'
+				;
+
+				if(amiLogin.hasRole('AMI_ADMIN'))
+				{
+					menu +=
+						'<li class="nav-item dropdown">' +
+						'  <a href="#" class="nav-link dropdown-toggle" data-bs-toggle="dropdown">' +
+						'    <i class="bi bi-key"></i> Admin' +
+						'  </a>' +
+						'  <div class="dropdown-menu">' +
+						'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=adminDashboard">Admin Dashboard</a>' +
+						'    <a class="dropdown-item" href="' + amiWebApp.webAppURL + '?subapp=searchModeler">Search Modeler</a>' +
+						'  </div>' +
+						'</li>'
+					;
+				}
+
+				$('#ami_main_menu_content').html(menu);
+
+				// Custom : set selected database
+				$('#ami_ext_menu_content').prepend(
+					'<li class="nav-item">' +
+					`	<select id="databaseSelect"><option disabled ${projectName==null?"selected":''}>No database selected</option></select>` +
+					'</li>'
+				);
+
+				projectDatabasesNames.forEach(databaseName => {
+					const databaseNameDisplayed = databaseName.startsWith("AMI_Project")?databaseName.replace("AMI_Project_", ''):databaseName;
+					$("#databaseSelect").append(`<option value=${databaseName} ${projectName==databaseNameDisplayed?"selected":''}>${databaseNameDisplayed}</option>`);
+				});
+
+				$("#databaseSelect").change(async function(event) {
+					const projectName = event.target.value;
+					await setprojectName(projectName);
+					location.reload();
+				});
+			};
+
+			amiWebApp.onReady = function()
+			{
+				return amiWebApp.loadSubAppByURL('document');
+			};
+
+		</script>
+	</head>
+	<body>
+
+		<script type="text/javascript">
+
+			amiWebApp.start({
+				endpoint_url: 'https://localhost:8443/AMI/FrontEnd',
+			});
+
+		</script>
+
+	</body>
+</html>
